@@ -560,7 +560,7 @@ def export_models(
 
 
 def _save_auxiliary_weights(model, model_type: str, output_dir: Path):
-    if model_type != "qwen3_omni":
+    if model_type not in ("qwen3_omni", "qwen3_omni_moe"):
         return
     # CodePredictor is traced with inputs_embeds, so the per-step codec_embedding
     # tables aren't part of the IR and must be dumped separately for runtime lookup.

@@ -118,6 +118,7 @@ class ExportModelTest(unittest.TestCase):
             {
                 "qwen3_next": OVModelForCausalLM,
                 "qwen3_omni": OVModelForVisualCausalLM,
+                "qwen3_omni_moe": OVModelForVisualCausalLM,
             }
         )
 
@@ -162,6 +163,10 @@ class ExportModelTest(unittest.TestCase):
             from transformers import Qwen3OmniForConditionalGeneration
 
             model = Qwen3OmniForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "qwen3_omni_moe":
+            from transformers import Qwen3OmniMoeForConditionalGeneration
+
+            model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
@@ -344,6 +349,25 @@ class ExportModelTest(unittest.TestCase):
         from transformers import Qwen3OmniForConditionalGeneration
 
         model = Qwen3OmniForConditionalGeneration.from_pretrained(model_name, attn_implementation="eager")
+        with TemporaryDirectory() as tmpdir:
+            export_from_model(model, tmpdir, task=task, stateful=True)
+            for part_name in self.QWEN3_OMNI_EXPECTED_PARTS:
+                model_path = Path(tmpdir) / f"openvino_{part_name}.xml"
+                self.assertTrue(model_path.exists(), f"Missing {part_name} for task={task}")
+
+    @unittest.skipUnless(
+        is_transformers_version(">=", "4.57.0.dev0"), "qwen3_omni_moe requires transformers >= 4.57.0.dev0"
+    )
+    @parameterized.expand(["text-to-audio", "automatic-speech-recognition"])
+    def test_qwen3_omni_moe_export_task(self, task):
+        model_name = MODEL_NAMES["qwen3_omni_moe"]
+        from transformers import Qwen3OmniMoeForConditionalGeneration
+
+        model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(model_name, attn_implementation="eager")
+        # Sanity-check that the tiny generator actually produced an MoE model with shared experts on the
+        # talker (thinker has none). Catches regressions in tiny_qwen3_omni_moe.py before export runs.
+        self.assertGreater(getattr(model.config.thinker_config.text_config, "num_experts", 0), 1)
+        self.assertGreater(getattr(model.config.talker_config.text_config, "shared_expert_intermediate_size", 0), 0)
         with TemporaryDirectory() as tmpdir:
             export_from_model(model, tmpdir, task=task, stateful=True)
             for part_name in self.QWEN3_OMNI_EXPECTED_PARTS:

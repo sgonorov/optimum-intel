@@ -178,6 +178,8 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-generation-with-past", "qwen3_next"),
                 ("text-to-audio", "qwen3_omni"),
                 ("automatic-speech-recognition", "qwen3_omni"),
+                ("text-to-audio", "qwen3_omni_moe"),
+                ("automatic-speech-recognition", "qwen3_omni_moe"),
             ]
         )
 
@@ -855,8 +857,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
 
     def _load_exported_ov_model(self, model_type: str, task: str, tmpdir: str, model_kwargs: Dict):
-        # qwen3_omni spans multiple tasks but always loads via OVModelForVisualCausalLM.
-        if model_type == "qwen3_omni":
+        # qwen3_omni and qwen3_omni_moe span multiple tasks but always load via OVModelForVisualCausalLM.
+        if model_type in ("qwen3_omni", "qwen3_omni_moe"):
             from optimum.intel.openvino import OVModelForVisualCausalLM
 
             return OVModelForVisualCausalLM.from_pretrained(tmpdir, **model_kwargs)

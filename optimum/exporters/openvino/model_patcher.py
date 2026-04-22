@@ -74,6 +74,15 @@ if is_transformers_version(">=", "4.56"):
 if is_transformers_version(">=", "5"):
     from transformers.modeling_rope_utils import RotaryEmbeddingConfigMixin
 
+try:
+    from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+        Qwen3OmniMoeTalkerTextSparseMoeBlock,
+        Qwen3OmniMoeThinkerTextSparseMoeBlock,
+    )
+except ImportError:
+    Qwen3OmniMoeThinkerTextSparseMoeBlock = None
+    Qwen3OmniMoeTalkerTextSparseMoeBlock = None
+
 if TYPE_CHECKING:
     from transformers.cache_utils import Cache
     from transformers.modeling_utils import PreTrainedModel
@@ -8773,3 +8782,88 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 sparse_moe_block = decoder_layer.mlp
                 decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
+
+
+# Adopted from qwen3_moe_forward_patched above, extended with shared expert computation.
+# https://github.com/huggingface/transformers/blob/v4.57.0/src/transformers/models/qwen3_omni_moe/modeling_qwen3_omni_moe.py#L2703
+def qwen3_omni_moe_talker_sparse_forward_patched(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    batch_size, sequence_length, hidden_dim = hidden_states.shape
+    hidden_states = hidden_states.view(-1, hidden_dim)
+    router_logits = self.gate(hidden_states)
+
+    routing_weights = torch.nn.functional.softmax(router_logits, dim=1, dtype=torch.float)
+    routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+    if self.norm_topk_prob:
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+    routing_weights = routing_weights.to(hidden_states.dtype)
+
+    final_hidden_states = torch.zeros(
+        (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+    )
+
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+
+    for expert_idx in range(self.num_experts):
+        expert_layer = self.experts[expert_idx]
+        idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
+
+        current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+
+        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+
+    shared_expert_output = self.shared_expert(hidden_states)
+    shared_expert_output = torch.nn.functional.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
+    final_hidden_states = final_hidden_states + shared_expert_output
+
+    final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+    return final_hidden_states, router_logits
+
+
+class Qwen3OmniMoeLanguageModelPatcher(Qwen3OmniLanguageModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if Qwen3OmniMoeThinkerTextSparseMoeBlock is not None:
+            self.original_thinker_moe_forward = Qwen3OmniMoeThinkerTextSparseMoeBlock.forward
+            Qwen3OmniMoeThinkerTextSparseMoeBlock.forward = qwen3_moe_forward_patched
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if Qwen3OmniMoeThinkerTextSparseMoeBlock is not None:
+            Qwen3OmniMoeThinkerTextSparseMoeBlock.forward = self.original_thinker_moe_forward
+        super().__exit__(exc_type, exc_value, traceback)
+
+
+class Qwen3OmniMoeTalkerLanguageModelPatcher(Qwen3OmniTalkerLanguageModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if Qwen3OmniMoeTalkerTextSparseMoeBlock is not None:
+            self.original_talker_moe_forward = Qwen3OmniMoeTalkerTextSparseMoeBlock.forward
+            Qwen3OmniMoeTalkerTextSparseMoeBlock.forward = qwen3_omni_moe_talker_sparse_forward_patched
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if Qwen3OmniMoeTalkerTextSparseMoeBlock is not None:
+            Qwen3OmniMoeTalkerTextSparseMoeBlock.forward = self.original_talker_moe_forward
+        super().__exit__(exc_type, exc_value, traceback)
+
+
+Qwen3OmniMoeCodePredictorPatcher = Qwen3OmniCodePredictorPatcher
+
+
+class Qwen3OmniMoeCode2WavPatcher(Qwen3OmniCode2WavPatcher):
+    def __enter__(self):
+        # Bypass Qwen3OmniCode2WavPatcher.__enter__ because it patches the dense module path.
+        ModelPatcher.__enter__(self)
+        import transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe as qwen3_omni_moe_module
+
+        self._orig_get_extra_padding = qwen3_omni_moe_module.Qwen3OmniMoeCausalConvNet._get_extra_padding_for_conv1d
+        qwen3_omni_moe_module.Qwen3OmniMoeCausalConvNet._get_extra_padding_for_conv1d = lambda self, hidden_state: 0
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        ModelPatcher.__exit__(self, exc_type, exc_value, traceback)
+        if self._orig_get_extra_padding is not None:
+            import transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe as qwen3_omni_moe_module
+
+            qwen3_omni_moe_module.Qwen3OmniMoeCausalConvNet._get_extra_padding_for_conv1d = (
+                self._orig_get_extra_padding
+            )

@@ -194,7 +194,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
             if self.config.model_type in ["qwen2_vl", "qwen3_vl"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
-            elif self.config.model_type == "qwen3_omni" and position_ids.ndim != 3:
+            elif self.config.model_type in ("qwen3_omni", "qwen3_omni_moe") and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
 
             inputs["position_ids"] = position_ids
@@ -979,7 +979,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
         # Prepare additional kwargs for qwen3_vl models
         additional_kwargs = {}
-        if self.config.model_type in ("qwen3_vl", "qwen3_omni") and extra_outputs:
+        if self.config.model_type in ("qwen3_vl", "qwen3_omni", "qwen3_omni_moe") and extra_outputs:
             additional_kwargs["visual_pos_masks"] = extra_outputs[0]
             additional_kwargs["deepstack_visual_embeds"] = extra_outputs[1]
 
@@ -4983,9 +4983,9 @@ class OVModelForOmni(OVBaseModel, GenerationMixin):
         config: PretrainedConfig,
         **kwargs,
     ):
-        if getattr(config, "model_type", None) != "qwen3_omni":
+        if getattr(config, "model_type", None) not in ("qwen3_omni", "qwen3_omni_moe"):
             raise ValueError(
-                f"OVModelForOmni only supports qwen3_omni models, "
+                f"OVModelForOmni only supports qwen3_omni and qwen3_omni_moe models, "
                 f"but got config.model_type={getattr(config, 'model_type', None)!r}. "
                 f"Use OVModelForVisualCausalLM for other vision-language architectures."
             )
@@ -4999,9 +4999,9 @@ class OVModelForOmni(OVBaseModel, GenerationMixin):
         config: PretrainedConfig,
         **kwargs,
     ):
-        if getattr(config, "model_type", None) != "qwen3_omni":
+        if getattr(config, "model_type", None) not in ("qwen3_omni", "qwen3_omni_moe"):
             raise ValueError(
-                f"OVModelForOmni only supports qwen3_omni models, "
+                f"OVModelForOmni only supports qwen3_omni and qwen3_omni_moe models, "
                 f"but got config.model_type={getattr(config, 'model_type', None)!r}. "
                 f"Use OVModelForVisualCausalLM for other vision-language architectures."
             )
@@ -6009,5 +6009,6 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "llama4": _OVLlama4ForCausalLM,
     "qwen3_vl": _OVQwen3VLForCausalLM,
     "qwen3_omni": _OVQwen3OmniForCausalLM,
+    "qwen3_omni_moe": _OVQwen3OmniForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
 }

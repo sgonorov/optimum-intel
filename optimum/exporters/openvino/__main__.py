@@ -661,7 +661,7 @@ def _main_quantize(
             trust_remote_code=trust_remote_code,
         )
         model_type = config.model_type
-        if model_type in ["phi4mm", "phi4_multimodal", "qwen3_omni"]:
+        if model_type in ["phi4mm", "phi4_multimodal", "qwen3_omni", "qwen3_omni_moe"]:
             task = "image-text-to-text"
 
     # Step 1. Obtain the correct OpenVINO model class

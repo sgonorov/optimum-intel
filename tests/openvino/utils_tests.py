@@ -347,6 +347,19 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "code_predictor_model": 18,
         "code2wav_model": 68,
     },
+    # TODO: placeholder copied from qwen3_omni; counts need empirical validation after first test run
+    "qwen3_omni_moe": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 34,
+        "vision_embeddings_pos_model": 1,
+        "audio_encoder_model": 10,
+        "talker_model": 30,
+        "talker_text_embeddings_model": 1,
+        "talker_projections_model": 5,
+        "code_predictor_model": 18,
+        "code2wav_model": 68,
+    },
     "sana": {
         "transformer": 58,
         "vae_decoder": 28,

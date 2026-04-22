@@ -292,6 +292,10 @@ def init_model_configs():
         "transformers",
         "Qwen3OmniForConditionalGeneration",
     )
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_omni_moe", "automatic-speech-recognition")] = (
+        "transformers",
+        "Qwen3OmniMoeForConditionalGeneration",
+    )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -512,6 +516,24 @@ class Qwen3OmniTalkerTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = OVDecoderModelPatcher
+
+
+@register_in_tasks_manager(
+    "qwen3_omni_moe_text",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Qwen3OmniMoeTextOpenVINOConfig(Qwen3OmniTextOpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "qwen3_omni_moe_talker_text",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Qwen3OmniMoeTalkerTextOpenVINOConfig(Qwen3OmniTalkerTextOpenVINOConfig):
+    pass
 
 
 @register_in_tasks_manager(
@@ -4476,6 +4498,89 @@ class Qwen3OmniOpenVINOConfig(BaseVLMOpenVINOConfig):
                         result["intermediate_hidden_states"] = {0: "batch_size", 1: "sequence_length"}
             return result
         raise Exception("Unknown Qwen3Omni behavior type.")
+
+
+@register_in_tasks_manager(
+    "qwen3_omni_moe",
+    *["image-text-to-text", "text-to-audio", "automatic-speech-recognition"],
+    library_name="transformers",
+)
+class Qwen3OmniMoeOpenVINOConfig(Qwen3OmniOpenVINOConfig):
+    def with_behavior(self, behavior: Union[str, "Qwen3OmniConfigBehavior"]):
+        if isinstance(behavior, str) and not isinstance(behavior, Qwen3OmniConfigBehavior):
+            behavior = Qwen3OmniConfigBehavior(behavior)
+
+        thinker_config = getattr(self._orig_config, "thinker_config", self._orig_config)
+
+        if behavior == Qwen3OmniConfigBehavior.TEXT_EMBEDDINGS:
+            text_config = getattr(thinker_config, "text_config", thinker_config)
+            return get_vlm_text_embeddings_config("qwen3_omni_moe_text", text_config, self.int_dtype, self.float_dtype)
+
+        if behavior == Qwen3OmniConfigBehavior.LANGUAGE:
+            from .model_patcher import Qwen3OmniMoeLanguageModelPatcher
+
+            text_config = getattr(thinker_config, "text_config", thinker_config)
+            internal_config = get_vlm_internal_text_generation_config(
+                "qwen3_omni_moe_text", text_config, self.int_dtype, self.float_dtype
+            )
+            config = Qwen3OmniLMConfigHelper(
+                internal_config,
+                patcher_cls=Qwen3OmniMoeLanguageModelPatcher,
+                dummy_input_generator=DummyQwen3OmniLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                model_config=self._orig_config,
+            )
+            config._normalized_config = internal_config._normalized_config
+            vision_config = getattr(thinker_config, "vision_config", None)
+            if vision_config is not None:
+                config._normalized_config.deepstack_visual_indexes = vision_config.deepstack_visual_indexes
+            return config
+
+        if behavior == Qwen3OmniConfigBehavior.TALKER_TEXT_EMBEDDINGS:
+            talker_config = getattr(self._orig_config, "talker_config", self._orig_config)
+            talker_text_config = getattr(talker_config, "text_config", talker_config)
+            return get_vlm_text_embeddings_config(
+                "qwen3_omni_moe_talker_text", talker_text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == Qwen3OmniConfigBehavior.TALKER:
+            from .model_patcher import Qwen3OmniMoeTalkerLanguageModelPatcher
+
+            talker_config = getattr(self._orig_config, "talker_config", self._orig_config)
+            talker_text_config = getattr(talker_config, "text_config", talker_config)
+            internal_config = get_vlm_internal_text_generation_config(
+                "qwen3_omni_moe_talker_text", talker_text_config, self.int_dtype, self.float_dtype
+            )
+            config = Qwen3OmniTalkerLMConfigHelper(
+                internal_config,
+                patcher_cls=Qwen3OmniMoeTalkerLanguageModelPatcher,
+            )
+            config._normalized_config = internal_config._normalized_config
+            return config
+
+        if behavior == Qwen3OmniConfigBehavior.CODE_PREDICTOR:
+            from .model_patcher import Qwen3OmniMoeCodePredictorPatcher
+
+            talker_config = getattr(self._orig_config, "talker_config", self._orig_config)
+            cp_config = getattr(talker_config, "code_predictor_config", talker_config)
+            internal_config = get_vlm_internal_text_generation_config(
+                "qwen3_omni_moe_talker_text", cp_config, self.int_dtype, self.float_dtype
+            )
+            config = Qwen3OmniCodePredictorLMConfigHelper(
+                internal_config,
+                patcher_cls=Qwen3OmniMoeCodePredictorPatcher,
+            )
+            config._normalized_config = internal_config._normalized_config
+            return config
+
+        return super().with_behavior(behavior)
+
+    def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
+        if self._behavior == Qwen3OmniConfigBehavior.CODE2WAV:
+            from .model_patcher import Qwen3OmniMoeCode2WavPatcher
+
+            return Qwen3OmniMoeCode2WavPatcher(self, model, model_kwargs or {})
+        return super().patch_model_for_export(model, model_kwargs)
 
 
 @register_in_tasks_manager(
